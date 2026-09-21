@@ -62,6 +62,36 @@ describe('Task API', () => {
     expect((await request(app).delete(`/api/tasks/${task.id}`)).status).toBe(404);
   });
 
+  test('rejects invalid task identifiers when updating', async () => {
+    const response = await request(app).patch('/api/tasks/not-a-number').send({ title: 'Updated task' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Valid task ID is required' });
+  });
+
+  test('returns 404 for a missing task update', async () => {
+    const response = await request(app).patch('/api/tasks/999999').send({ title: 'Ghost task' });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Task not found' });
+  });
+
+  test('rejects blank task titles during updates', async () => {
+    const task = await createTask();
+    const response = await request(app).patch(`/api/tasks/${task.id}`).send({ title: '   ' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Task title is required' });
+  });
+
+  test('rejects non-boolean completed values during updates', async () => {
+    const task = await createTask();
+    const response = await request(app).patch(`/api/tasks/${task.id}`).send({ completed: 'yes' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Completed must be a boolean' });
+  });
+
   test('rejects invalid task identifiers', async () => {
     const response = await request(app).delete('/api/tasks/not-a-number');
 
