@@ -1,126 +1,182 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert, AppBar, Box, Button, Checkbox, Chip, Container, Dialog,
+  DialogActions, DialogContent, DialogContentText, DialogTitle, FormControl,
+  IconButton, InputLabel, MenuItem, Paper, Select, Stack, TextField,
+  Toolbar, Tooltip, Typography,
+} from '@mui/material';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
+import AddIcon from '@mui/icons-material/Add';
 import './App.css';
 
+const emptyForm = { title: '', description: '', due_date: '' };
+
+const request = async (url, options) => {
+  const response = await fetch(url, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+};
+
+const isOverdue = (task) => task.due_date && !task.completed && task.due_date < new Date().toISOString().slice(0, 10);
+
 function App() {
-  const [data, setData] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [newItem, setNewItem] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const loadTasks = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/items');
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
-      }
-      const result = await response.json();
-      setData(result);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch data: ' + err.message);
-      console.error('Error fetching data:', err);
+      setError('');
+      setTasks(await request('/api/tasks'));
+    } catch (loadError) {
+      setError(loadError.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!newItem.trim()) return;
+  useEffect(() => { loadTasks(); }, []);
 
+  const visibleTasks = useMemo(() => tasks.filter((task) => {
+    const matchesFilter = filter === 'all' || (filter === 'active' && !task.completed) || (filter === 'completed' && task.completed);
+    const query = search.trim().toLowerCase();
+    return matchesFilter && (!query || `${task.title} ${task.description}`.toLowerCase().includes(query));
+  }), [filter, search, tasks]);
+
+  const handleChange = (event) => setForm({ ...form, [event.target.name]: event.target.value });
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!form.title.trim()) {
+      setError('Task title is required');
+      return;
+    }
     try {
-      const response = await fetch('/api/items', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: newItem }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to add item');
-      }
-
-      const result = await response.json();
-      setData([...data, result]);
-      setNewItem('');
-    } catch (err) {
-      setError('Error adding item: ' + err.message);
-      console.error('Error adding item:', err);
+      setSaving(true);
+      setError('');
+      const url = editingId ? `/api/tasks/${editingId}` : '/api/tasks';
+      const method = editingId ? 'PATCH' : 'POST';
+      const savedTask = await request(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      setTasks((current) => editingId ? current.map((task) => task.id === editingId ? savedTask : task) : [...current, savedTask]);
+      setForm(emptyForm);
+      setEditingId(null);
+      setNotice(editingId ? 'Task updated' : 'Task added');
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (itemId) => {
+  const toggleTask = async (task) => {
     try {
-      const response = await fetch(`/api/items/${itemId}`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete item');
-      }
-
-      setData(data.filter(item => item.id !== itemId));
-      setError(null);
-    } catch (err) {
-      setError('Error deleting item: ' + err.message);
-      console.error('Error deleting item:', err);
+      const updatedTask = await request(`/api/tasks/${task.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) });
+      setTasks((current) => current.map((item) => item.id === task.id ? updatedTask : item));
+    } catch (toggleError) {
+      setError(toggleError.message);
     }
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await request(`/api/tasks/${deleteTarget.id}`, { method: 'DELETE' });
+      setTasks((current) => current.filter((task) => task.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      setNotice('Task deleted');
+    } catch (deleteError) {
+      setError(deleteError.message);
+    }
+  };
+
+  const startEdit = (task) => {
+    setEditingId(task.id);
+    setForm({ title: task.title, description: task.description || '', due_date: task.due_date || '' });
+    setError('');
   };
 
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>To Do App</h1>
-        <p>Keep track of your tasks</p>
-      </header>
+    <Box className="app-shell">
+      <AppBar position="static" elevation={0} className="app-bar">
+        <Toolbar><Typography variant="h5" component="h1">Task List</Typography></Toolbar>
+      </AppBar>
+      <Container maxWidth="md" component="main" className="app-content">
+        <Stack spacing={3}>
+          <Box>
+            <Typography variant="h3" component="h2" gutterBottom>Make room for what matters.</Typography>
+            <Typography color="text.secondary">Plan the next small thing, then let the list hold the rest.</Typography>
+          </Box>
 
-      <main>
-        <section className="add-item-section">
-          <h2>Add New Item</h2>
-          <form onSubmit={handleSubmit}>
-            <input
-              type="text"
-              value={newItem}
-              onChange={(e) => setNewItem(e.target.value)}
-              placeholder="Enter item name"
-            />
-            <button type="submit">Add Item</button>
-          </form>
-        </section>
+          <Paper component="form" onSubmit={handleSubmit} className="task-form" elevation={0}>
+            <Stack spacing={2}>
+              <Typography variant="h6">{editingId ? 'Edit task' : 'Add a task'}</Typography>
+              <TextField required label="Task title" name="title" value={form.title} onChange={handleChange} autoComplete="off" />
+              <TextField label="Description" name="description" value={form.description} onChange={handleChange} multiline minRows={2} />
+              <TextField label="Due date" name="due_date" type="date" value={form.due_date} onChange={handleChange} InputLabelProps={{ shrink: true }} />
+              <Stack direction="row" spacing={1}>
+                <Button type="submit" variant="contained" startIcon={editingId ? <SaveOutlinedIcon /> : <AddIcon />} disabled={saving}>
+                  {saving ? 'Saving...' : editingId ? 'Save task' : 'Add task'}
+                </Button>
+                {editingId && <Button type="button" onClick={() => { setEditingId(null); setForm(emptyForm); }}>Cancel</Button>}
+              </Stack>
+            </Stack>
+          </Paper>
 
-        <section className="items-section">
-          <h2>Items from Database</h2>
-          {loading && <p>Loading data...</p>}
-          {error && <p className="error">{error}</p>}
-          {!loading && !error && (
-            <ul>
-              {data.length > 0 ? (
-                data.map((item) => (
-                  <li key={item.id}>
-                    <span>{item.name}</span>
-                    <button 
-                      onClick={() => handleDelete(item.id)}
-                      className="delete-btn"
-                      type="button"
-                    >
-                      Delete
-                    </button>
-                  </li>
-                ))
-              ) : (
-                <p>No items found. Add some!</p>
-              )}
-            </ul>
-          )}
-        </section>
-      </main>
-    </div>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+            <TextField fullWidth label="Search tasks" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <FormControl sx={{ minWidth: 150 }}>
+              <InputLabel id="filter-label">Show</InputLabel>
+              <Select labelId="filter-label" label="Show" value={filter} onChange={(event) => setFilter(event.target.value)}>
+                <MenuItem value="all">All tasks</MenuItem>
+                <MenuItem value="active">Active</MenuItem>
+                <MenuItem value="completed">Completed</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+
+          {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
+          {notice && <Alert severity="success" onClose={() => setNotice('')}>{notice}</Alert>}
+
+          <Box component="section" aria-labelledby="tasks-heading">
+            <Typography id="tasks-heading" variant="h6" gutterBottom>Tasks</Typography>
+            {loading && <Typography color="text.secondary">Loading tasks...</Typography>}
+            {!loading && visibleTasks.length === 0 && <Typography color="text.secondary">No tasks match this view.</Typography>}
+            <Stack component="ul" spacing={1} className="task-list">
+              {visibleTasks.map((task) => (
+                <Paper component="li" key={task.id} className={`task-row ${task.completed ? 'is-complete' : ''}`} elevation={0}>
+                  <Checkbox checked={task.completed} onChange={() => toggleTask(task)} slotProps={{ input: { 'aria-label': `Mark ${task.title} ${task.completed ? 'incomplete' : 'complete'}` } }} />
+                  <Box className="task-details">
+                    <Typography component="span" className="task-title">{task.title}</Typography>
+                    {task.description && <Typography variant="body2" color="text.secondary">{task.description}</Typography>}
+                    {task.due_date && <Chip size="small" label={isOverdue(task) ? `Overdue: ${task.due_date}` : `Due: ${task.due_date}`} color={isOverdue(task) ? 'warning' : 'default'} />}
+                  </Box>
+                  <Stack direction="row" className="task-actions">
+                    <Tooltip title="Edit task"><IconButton aria-label={`Edit ${task.title}`} onClick={() => startEdit(task)}><EditOutlinedIcon /></IconButton></Tooltip>
+                    <Tooltip title="Delete task"><IconButton aria-label={`Delete ${task.title}`} onClick={() => setDeleteTarget(task)} color="error"><DeleteOutlinedIcon /></IconButton></Tooltip>
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          </Box>
+        </Stack>
+      </Container>
+
+      <Dialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} aria-labelledby="delete-dialog-title">
+        <DialogTitle id="delete-dialog-title">Delete task?</DialogTitle>
+        <DialogContent><DialogContentText>This will permanently remove "{deleteTarget?.title}".</DialogContentText></DialogContent>
+        <DialogActions><Button onClick={() => setDeleteTarget(null)}>Cancel</Button><Button onClick={confirmDelete} color="error" variant="contained">Delete</Button></DialogActions>
+      </Dialog>
+    </Box>
   );
 }
 
